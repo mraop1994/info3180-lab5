@@ -6,19 +6,16 @@ Werkzeug Documentation:  http://werkzeug.pocoo.org/documentation/
 This file creates your application.
 """
 
-from app import app
-from flask import render_template, request, redirect, url_for,jsonify,g,session
-from app import db
-
+from flask import render_template, request, redirect, url_for, jsonify, g, session, Flask, flash, abort
 from flask.ext.wtf import Form 
 from wtforms.fields import TextField # other fields include PasswordField 
 from wtforms.validators import Required, Email
 from app.models import Myprofile
 from app.forms import LoginForm
-
+from flask.ext.openid import OpenID
 from flask.ext.login import login_user, logout_user, current_user, login_required
 from app import app, db, lm, oid
-from app import oid, lm
+
 
 class ProfileForm(Form):
      first_name = TextField('First Name', validators=[Required()])
@@ -27,27 +24,59 @@ class ProfileForm(Form):
      image = TextField('Image', validators=[Required(), Email()])
 
 
+@lm.user_loader
+def load_user(id):
+    return Myprofile.query.get(int(id))
+
+
 @app.before_request
 def before_request():
     g.user = current_user
-    
+
+
 ###
 # Routing for your application.
 ###
+
 @app.route('/login', methods=['GET', 'POST'])
 @oid.loginhandler
 def login():
-    if g.user is not None and g.user.is_authenticated():
-        return redirect(url_for('index'))
+    # user = g.user
+    # if g.user is not None and g.user.is_authenticated():
+    #     return redirect(url_for('index'))
     form = LoginForm()
     print app.config['OPENID_PROVIDERS']
     if form.validate_on_submit():
         session['remember_me'] = form.remember_me.data
         return oid.try_login(form.openid.data, ask_for=['nickname', 'email'])
     return render_template('login.html', 
-                           title='Sign In',
-                           form=form,
-                           providers=app.config['OPENID_PROVIDERS'])
+                          title='Sign In',
+                          form=form,
+                          providers=app.config['OPENID_PROVIDERS'])
+
+
+
+
+@oid.after_login
+def after_login(resp):
+    if resp.email is None or resp.email == "":
+        flash('Invalid login. Please try again.')
+        return redirect(url_for('login'))
+    user = MyProfile.query.filter_by(email=resp.email).first()
+    if user is None:
+        nickname = resp.nickname
+        if nickname is None or nickname == "":
+            nickname = resp.email.split('@')[0]
+        user = MyProfile(nickname=nickname, email=resp.email)
+        db.session.add(user)
+        db.session.commit()
+    remember_me = False
+    if 'remember_me' in session:
+        remember_me = session['remember_me']
+        session.pop('remember_me', None)
+    login_user(user, remember = remember_me)
+    return redirect(request.args.get('next') or url_for('index'))
+
 @app.route('/')
 def home():
     """Render website's home page."""
